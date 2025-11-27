@@ -10,6 +10,16 @@ from PIL import Image, ImageDraw
 from pynput import keyboard
 import pythoncom
 import win32com.client as com_client
+import sys
+import win32event, win32api, winerror
+
+def check_single_instance(mutex_name="AutoLockerMutex"):
+    handle = win32event.CreateMutex(None, False, mutex_name)
+    if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+        ctypes.windll.user32.MessageBoxW(0, "AutoLocker 已经在运行中！", "提示", 0x40)
+        sys.exit(0)
+    return handle
+
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)  # 1=System DPI, 2=Per-Monitor DPI
@@ -127,24 +137,31 @@ class USBAutoLocker:
         height = 64
         image = Image.new('RGB', (width, height), color=(255, 255, 255))
         dc = ImageDraw.Draw(image)
-        dc.rectangle((20, 28, 44, 52), outline="black", fill="black")
+        dc.rectangle((15, 28, 50, 51), outline="black", fill="black")
+        dc.line((23, 22, 23, 28), fill="black", width=4)
 
-        dc.arc((20, 8, 44, 36), start=0, end=180, fill="black")
-        dc.line((20, 22, 20, 28), fill="black", width=4)
-        dc.line((44, 22, 44, 28), fill="black", width=4)
+        if self.is_enabled:
+            # 闭合锁环
+            dc.arc((22, 12, 42, 36), start=180, end=0, fill="black", width=4)
+            dc.line((40, 22, 40, 28), fill="black", width=4)
+        else:
+            # 打开锁环
+            dc.arc((22, 12, 42, 36), start=180, end=300, fill="black", width=4)
 
         menu = Menu(
             MenuItem('启用自动锁屏', self.toggle_enable, checked=lambda item: self.is_enabled),
             MenuItem('退出', self.quit_app)
         )
         self.icon = Icon("USB_Locker", image, "USB 自动锁屏助手", menu)
+        self.icon.update_menu()
         
 
-        
     def toggle_enable(self, icon, item):
         self.is_enabled = not self.is_enabled
         state = "已启用" if self.is_enabled else "已禁用"
         self.icon.notify(f"自动锁屏功能{state}", "状态更新")
+        # 重新绘制图标并刷新
+        self.create_tray_icon()
 
     def quit_app(self, icon, item):
         # 释放所有资源并强制退出
@@ -260,9 +277,9 @@ class USBAutoLocker:
         self.root.mainloop()
 
 if __name__ == "__main__":
+    mutex = check_single_instance()
     app = USBAutoLocker()
     app.start()
-    
     try:
         app.icon.run()
     except KeyboardInterrupt:
