@@ -171,9 +171,13 @@ class AutoStartManager:
     @classmethod
     def get_exe_path(cls) -> str:
         if getattr(sys, 'frozen', False):
-            return sys.executable
+            # PyInstaller 打包后
+            return f'"{sys.executable}"'
         else:
-            return f'pythonw "{os.path.abspath(__file__)}"'
+            # 开发环境：使用 pythonw 静默运行
+            python_path = sys.executable.replace('python.exe', 'pythonw.exe')
+            script_path = os.path.abspath(__file__)
+            return f'"{python_path}" "{script_path}"'
 
     @classmethod
     def is_enabled(cls) -> bool:
@@ -591,7 +595,6 @@ class USBAutoLockerApp:
         self.settings_window: Optional[SettingsWindow] = None
         self.is_enabled = True
         self.last_shift_time = 0
-        self.popup_lock = threading.Lock()
         self.keyboard_listener = keyboard.Listener(on_release=self._on_key_release)
         self.keyboard_listener.start()
 
@@ -609,11 +612,16 @@ class USBAutoLockerApp:
         subprocess.run("rundll32.exe user32.dll,LockWorkStation", shell=True)
 
     def _on_device_removed(self):
-        if not self.is_enabled or self.popup_lock.locked():
+        if not self.is_enabled:
+            print("自动锁屏已禁用，跳过")
             return
-        with self.popup_lock:
-            self.countdown_popup = CountdownPopup(self.root, self.config_manager.config.countdown_seconds, on_complete=self._execute_lock)
-            self.root.after(0, self.countdown_popup.show)
+        # 如果已经在倒计时中，不重复触发
+        if self.countdown_popup and self.countdown_popup.is_showing:
+            print("已在倒计时中，跳过")
+            return
+        print(f"触发锁屏倒计时 ({self.config_manager.config.countdown_seconds}秒)...")
+        self.countdown_popup = CountdownPopup(self.root, self.config_manager.config.countdown_seconds, on_complete=self._execute_lock)
+        self.root.after(0, self.countdown_popup.show)
 
     def _on_device_inserted(self):
         if self.tray_manager:
