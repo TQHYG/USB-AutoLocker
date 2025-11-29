@@ -170,48 +170,68 @@ class AutoStartManager:
 
     @classmethod
     def get_exe_path(cls) -> str:
+        """获取启动命令路径"""
         if getattr(sys, 'frozen', False):
             # PyInstaller 打包后
             return f'"{sys.executable}"'
         else:
-            # 开发环境：使用 pythonw 静默运行
-            python_path = sys.executable.replace('python.exe', 'pythonw.exe')
+            # 开发环境：优先使用 pythonw（静默），否则用 python
+            python_dir = os.path.dirname(sys.executable)
+            pythonw = os.path.join(python_dir, 'pythonw.exe')
+            if os.path.exists(pythonw):
+                python_path = pythonw
+            else:
+                python_path = sys.executable
             script_path = os.path.abspath(__file__)
             return f'"{python_path}" "{script_path}"'
 
     @classmethod
-    def is_enabled(cls) -> bool:
+    def get_current_path(cls) -> Optional[str]:
+        """获取当前注册表中的启动路径"""
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, cls.REG_PATH, 0, winreg.KEY_READ)
             try:
-                winreg.QueryValueEx(key, APP_NAME)
-                return True
+                value, _ = winreg.QueryValueEx(key, APP_NAME)
+                return value
             except FileNotFoundError:
-                return False
+                return None
             finally:
                 winreg.CloseKey(key)
         except Exception:
-            return False
+            return None
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        """检查是否已启用开机自启"""
+        return cls.get_current_path() is not None
 
     @classmethod
     def enable(cls) -> bool:
+        """启用开机自启"""
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, cls.REG_PATH, 0, winreg.KEY_SET_VALUE)
-            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, cls.get_exe_path())
+            exe_path = cls.get_exe_path()
+            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, exe_path)
             winreg.CloseKey(key)
-            return True
+            # 验证写入成功
+            if cls.get_current_path() == exe_path:
+                print(f"开机自启已启用: {exe_path}")
+                return True
+            return False
         except Exception as e:
             print(f"启用开机自启失败: {e}")
             return False
 
     @classmethod
     def disable(cls) -> bool:
+        """禁用开机自启"""
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, cls.REG_PATH, 0, winreg.KEY_SET_VALUE)
             try:
                 winreg.DeleteValue(key, APP_NAME)
+                print("开机自启已禁用")
             except FileNotFoundError:
-                pass
+                pass  # 本来就没有
             winreg.CloseKey(key)
             return True
         except Exception as e:
@@ -220,7 +240,18 @@ class AutoStartManager:
 
     @classmethod
     def set_enabled(cls, enabled: bool) -> bool:
+        """设置开机自启状态"""
         return cls.enable() if enabled else cls.disable()
+
+    @classmethod
+    def update_path_if_needed(cls) -> None:
+        """如果路径变化，更新注册表（用于程序移动后）"""
+        current = cls.get_current_path()
+        if current is not None:
+            expected = cls.get_exe_path()
+            if current != expected:
+                print(f"检测到路径变化，更新自启动路径...")
+                cls.enable()
 
 
 # ==================== USB 监控 ====================
@@ -608,10 +639,18 @@ class USBAutoLockerApp:
             self.last_shift_time = now
 
     def _execute_lock(self):
+        """执行系统锁屏"""
         print("执行锁屏...")
-        subprocess.run("rundll32.exe user32.dll,LockWorkStation", shell=True)
+        try:
+            # 使用 ctypes 直接调用 Windows API（更可靠）
+            ctypes.windll.user32.LockWorkStation()
+        except Exception as e:
+            print(f"锁屏失败: {e}")
+            # 备用方案
+            subprocess.run("rundll32.exe user32.dll,LockWorkStation", shell=True)
 
     def _on_device_removed(self):
+        """设备拔出回调"""
         if not self.is_enabled:
             print("自动锁屏已禁用，跳过")
             return
@@ -624,6 +663,11 @@ class USBAutoLockerApp:
         self.root.after(0, self.countdown_popup.show)
 
     def _on_device_inserted(self):
+        """设备插入回调"""
+        # 如果正在倒计时，自动取消
+        if self.countdown_popup and self.countdown_popup.is_showing:
+            print("设备重新插入，取消锁屏倒计时")
+            self.countdown_popup.cancel()
         if self.tray_manager:
             self.tray_manager.notify("USB 密钥已插入", "设备状态")
 
@@ -676,4 +720,6 @@ class USBAutoLockerApp:
 
 if __name__ == "__main__":
     mutex = check_single_instance()
+    # 如果程序位置变化，自动更新自启动路径
+    AutoStartManager.update_path_if_needed()
     USBAutoLockerApp().run()
