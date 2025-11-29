@@ -3,3 +3,4 @@ pillow
 pynput
 pywin32
 wmi
+customtkinter
