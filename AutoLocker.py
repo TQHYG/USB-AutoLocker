@@ -61,6 +61,7 @@ class AppConfig:
     countdown_seconds: int = 5
     auto_start: bool = False
     enabled: bool = True
+    unlock_on_reconnect: bool = True  # 插回USB设备时是否取消锁屏
 
     def get_device_id_pattern(self) -> str:
         return f"%{self.device_vid}&{self.device_pid}%"
@@ -526,6 +527,8 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkLabel(opt_frame, text="📋 其他", font=("Microsoft YaHei", 14, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
         self.autostart_var = ctk.BooleanVar()
         ctk.CTkCheckBox(opt_frame, text="开机自动启动", variable=self.autostart_var).pack(anchor="w", padx=10, pady=5)
+        self.unlock_on_reconnect_var = ctk.BooleanVar()
+        ctk.CTkCheckBox(opt_frame, text="插回USB设备时自动取消锁屏", variable=self.unlock_on_reconnect_var).pack(anchor="w", padx=10, pady=5)
 
         # 按钮
         btn_frame = ctk.CTkFrame(main, fg_color="transparent")
@@ -591,6 +594,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.pid_entry.insert(0, cfg.device_pid)
         self.countdown_var.set(str(cfg.countdown_seconds))
         self.autostart_var.set(AutoStartManager.is_enabled())
+        self.unlock_on_reconnect_var.set(cfg.unlock_on_reconnect)
 
     def _save(self):
         vid = self.vid_entry.get().strip().upper()
@@ -605,7 +609,13 @@ class SettingsWindow(ctk.CTkToplevel):
             countdown = max(1, min(30, countdown))  # 限制在 1-30 之间
         except ValueError:
             countdown = 5
-        self.config_manager.update(device_vid=vid, device_pid=pid, countdown_seconds=countdown, auto_start=self.autostart_var.get())
+        self.config_manager.update(
+            device_vid=vid,
+            device_pid=pid,
+            countdown_seconds=countdown,
+            auto_start=self.autostart_var.get(),
+            unlock_on_reconnect=self.unlock_on_reconnect_var.get()
+        )
         AutoStartManager.set_enabled(self.autostart_var.get())
         if self.on_save_callback:
             self.on_save_callback()
@@ -664,10 +674,11 @@ class USBAutoLockerApp:
 
     def _on_device_inserted(self):
         """设备插入回调"""
-        # 如果正在倒计时，自动取消
-        if self.countdown_popup and self.countdown_popup.is_showing:
-            print("设备重新插入，取消锁屏倒计时")
-            self.countdown_popup.cancel()
+        # 根据配置决定是否在设备插入时取消锁屏
+        if self.config_manager.config.unlock_on_reconnect:
+            if self.countdown_popup and self.countdown_popup.is_showing:
+                print("设备重新插入，取消锁屏倒计时")
+                self.countdown_popup.cancel()
         if self.tray_manager:
             self.tray_manager.notify("USB 密钥已插入", "设备状态")
 
